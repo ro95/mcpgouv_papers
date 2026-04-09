@@ -1,0 +1,26 @@
+[
+  {
+    "entreprise": "Coaching & Formation",
+    "email": "contact@cf-coaching-formation.com",
+    "objet": "cf-coaching-formation.com — un constat + une idée",
+    "status": "simulated",
+    "problems": 1,
+    "timestamp": "2026-03-26T17:50:33.505467"
+  },
+  {
+    "entreprise": "Trajectives",
+    "email": "contact@trajectives.com",
+    "objet": "www.trajectives.com — un constat + une idée",
+    "status": "simulated",
+    "problems": 1,
+    "timestamp": "2026-03-26T17:50:33.507234"
+  },
+  {
+    "entreprise": "Groupe Grandir",
+    "email": "accueil@grandir-coaching-conseil.fr",
+    "objet": "grandir.fr — un constat + une idée",
+    "status": "simulated",
+    "problems": 1,
+    "timestamp": "2026-03-26T17:50:33.509254"
+  }
+]
