@@ -50,6 +50,8 @@ export class InseeApiClient {
   private readonly logger = new Logger(InseeApiClient.name);
   private readonly baseUrl = 'https://api.insee.fr/api-sirene/3.11';
 
+  constructor(private readonly configService: ConfigService) {}
+
   get isConfigured(): boolean {
     const key = this.configService.get<string>('insee.apiKey');
     return !!(key && key.length > 0);
