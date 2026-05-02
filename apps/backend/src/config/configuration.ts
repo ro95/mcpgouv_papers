@@ -18,4 +18,8 @@ export default () => ({
     apiKey: process.env.PAPPERS_API_KEY ?? '',
     baseUrl: process.env.PAPPERS_BASE_URL ?? 'https://api.pappers.fr/v2',
   },
+  pagespeed: {
+    // PageSpeed Insights — https://developers.google.com/speed/docs/insights/v5/get-started (clé optionnelle, sans clé : ~25 req/jour)
+    apiKey: process.env.PAGESPEED_API_KEY ?? '',
+  },
 });

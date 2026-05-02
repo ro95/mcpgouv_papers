@@ -4,6 +4,7 @@ import { APP_FILTER, APP_INTERCEPTOR } from '@nestjs/core';
 
 import configuration from './config/configuration';
 import { EntreprisesModule } from './modules/entreprises/entreprises.module';
+import { ProspectsModule } from './modules/prospects/prospects.module';
 import { GlobalHttpExceptionFilter } from './common/filters/http-exception.filter';
 import { ResponseTransformInterceptor } from './common/interceptors/response-transform.interceptor';
 
@@ -15,6 +16,7 @@ import { ResponseTransformInterceptor } from './common/interceptors/response-tra
       envFilePath: '.env',
     }),
     EntreprisesModule,
+    ProspectsModule,
   ],
   providers: [
     { provide: APP_FILTER, useClass: GlobalHttpExceptionFilter },
