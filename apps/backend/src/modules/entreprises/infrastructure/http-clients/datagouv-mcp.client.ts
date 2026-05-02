@@ -1,6 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import axios, { AxiosInstance } from 'axios';
 
 /**
  * Réponse brute d'un outil MCP (tools/call).
@@ -31,21 +30,12 @@ interface McpJsonRpcResponse<T> {
 @Injectable()
 export class DatagouvMcpClient {
   private readonly logger = new Logger(DatagouvMcpClient.name);
-  private readonly http: AxiosInstance;
+  private readonly baseUrl: string;
   private sessionId: string | null = null;
   private requestId = 0;
 
   constructor(private readonly configService: ConfigService) {
-    const baseUrl = this.configService.get<string>('api.datagouvMcpUrl')!;
-
-    this.http = axios.create({
-      baseURL: baseUrl,
-      headers: {
-        'Content-Type': 'application/json',
-        Accept: 'application/json, text/event-stream',
-      },
-      timeout: 30_000,
-    });
+    this.baseUrl = this.configService.get<string>('api.datagouvMcpUrl')!;
   }
 
   // ─────────────────────────────────────────────
@@ -59,9 +49,9 @@ export class DatagouvMcpClient {
   async initialize(): Promise<void> {
     if (this.sessionId) return;
 
-    const response = await this.http.post<
+    const { data, headers } = await this.post<
       McpJsonRpcResponse<{ protocolVersion: string; capabilities: object }>
-    >('', {
+    >({
       jsonrpc: '2.0',
       id: this.nextId(),
       method: 'initialize',
@@ -72,7 +62,7 @@ export class DatagouvMcpClient {
       },
     });
 
-    const sessionId = response.headers['mcp-session-id'] as string | undefined;
+    const sessionId = headers.get('mcp-session-id');
     if (sessionId) {
       this.sessionId = sessionId;
       this.logger.log(`Session MCP initialisée : ${sessionId}`);
@@ -136,25 +126,21 @@ export class DatagouvMcpClient {
   ): Promise<string> {
     await this.initialize();
 
-    const headers: Record<string, string> = {};
+    const extraHeaders: Record<string, string> = {};
     if (this.sessionId) {
-      headers['Mcp-Session-Id'] = this.sessionId;
+      extraHeaders['Mcp-Session-Id'] = this.sessionId;
     }
 
     try {
-      const response = await this.http.post<McpJsonRpcResponse<McpToolResult>>(
-        '',
+      const { data } = await this.post<McpJsonRpcResponse<McpToolResult>>(
         {
           jsonrpc: '2.0',
           id: this.nextId(),
           method: 'tools/call',
           params: { name, arguments: args },
         },
-        { headers },
+        extraHeaders,
       );
-
-      // Gestion SSE : si la réponse est text/event-stream, parser le texte
-      const data = response.data;
 
       if (data.error) {
         this.logger.error(`Erreur MCP tool ${name}: ${data.error.message}`);
@@ -175,5 +161,29 @@ export class DatagouvMcpClient {
 
   private nextId(): number {
     return ++this.requestId;
+  }
+
+  private async post<T>(
+    body: unknown,
+    extraHeaders: Record<string, string> = {},
+  ): Promise<{ data: T; headers: Headers }> {
+    const response = await fetch(this.baseUrl, {
+      method: 'POST',
+      signal: AbortSignal.timeout(30_000),
+      headers: {
+        'Content-Type': 'application/json',
+        Accept: 'application/json, text/event-stream',
+        ...extraHeaders,
+      },
+      body: JSON.stringify(body),
+    });
+
+    if (!response.ok) {
+      const text = await response.text().catch(() => '');
+      throw new Error(`MCP HTTP ${response.status}: ${text}`);
+    }
+
+    const data = (await response.json()) as T;
+    return { data, headers: response.headers };
   }
 }

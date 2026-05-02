@@ -1,6 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import axios, { AxiosInstance } from 'axios';
 
 // ─────────────────────────────────────────────
 // Types bruts renvoyés par l'API
@@ -77,31 +76,10 @@ export interface RechercheEntreprisesParams {
 @Injectable()
 export class RechercheEntreprisesClient {
   private readonly logger = new Logger(RechercheEntreprisesClient.name);
-  private readonly http: AxiosInstance;
+  private readonly baseUrl: string;
 
   constructor(private readonly configService: ConfigService) {
-    const baseUrl = this.configService.get<string>(
-      'api.rechercheEntreprisesBaseUrl',
-    )!;
-
-    this.http = axios.create({
-      baseURL: baseUrl,
-      timeout: 15_000,
-      headers: {
-        Accept: 'application/json',
-        'User-Agent': 'api-entreprises/1.0.0',
-      },
-    });
-
-    this.http.interceptors.response.use(
-      (res) => res,
-      (err) => {
-        this.logger.error(
-          `[RechercheEntreprises] ${err.config?.url} → ${err.response?.status ?? err.message}`,
-        );
-        return Promise.reject(err);
-      },
-    );
+    this.baseUrl = this.configService.get<string>('api.rechercheEntreprisesBaseUrl')!;
   }
 
   /**
@@ -113,15 +91,16 @@ export class RechercheEntreprisesClient {
       Object.entries(params).filter(([, v]) => v !== undefined && v !== ''),
     );
 
-    const response = await this.http.get<RawSearchResponse>('/search', {
-      params: cleanParams,
-    });
+    const query = new URLSearchParams(
+      Object.entries(cleanParams).map(([k, v]) => [k, String(v)]),
+    );
+    const data = await this.fetchJson<RawSearchResponse>(`/search?${query}`);
 
     this.logger.debug(
-      `[search] ${JSON.stringify(cleanParams)} → ${response.data.total_results} résultats`,
+      `[search] ${JSON.stringify(cleanParams)} → ${data.total_results} résultats`,
     );
 
-    return response.data;
+    return data;
   }
 
   /**
@@ -130,5 +109,24 @@ export class RechercheEntreprisesClient {
   async findBySiren(siren: string): Promise<RawEntreprise | null> {
     const response = await this.search({ q: `siren:${siren}`, per_page: 1 });
     return response.results[0] ?? null;
+  }
+
+  private async fetchJson<T>(path: string): Promise<T> {
+    const url = `${this.baseUrl}${path}`;
+    const response = await fetch(url, {
+      signal: AbortSignal.timeout(15_000),
+      headers: {
+        Accept: 'application/json',
+        'User-Agent': 'api-entreprises/1.0.0',
+      },
+    });
+
+    if (!response.ok) {
+      this.logger.error(`[RechercheEntreprises] ${path} → ${response.status}`);
+      const body = await response.text().catch(() => '');
+      throw new Error(`HTTP ${response.status}: ${body}`);
+    }
+
+    return response.json() as Promise<T>;
   }
 }

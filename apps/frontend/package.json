@@ -14,7 +14,6 @@
     "react-dom": "^19.0.0",
     "@tanstack/react-query": "^5.40.0",
     "@mcpgouv/shared-types": "workspace:*",
-    "axios": "^1.6.8",
     "date-fns": "^3.6.0",
     "lucide-react": "^0.383.0",
     "zod": "^3.23.0"

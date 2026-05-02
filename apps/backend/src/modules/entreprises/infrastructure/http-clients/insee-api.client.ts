@@ -1,6 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import axios, { AxiosInstance } from 'axios';
 
 // ─────────────────────────────────────────────
 // Types — réponse INSEE Sirene V3.11
@@ -49,15 +48,7 @@ export interface InseeSearchResponse {
 @Injectable()
 export class InseeApiClient {
   private readonly logger = new Logger(InseeApiClient.name);
-  private readonly api: AxiosInstance;
-
-  constructor(private readonly configService: ConfigService) {
-    this.api = axios.create({
-      baseURL: 'https://api.insee.fr/api-sirene/3.11',
-      timeout: 20_000,
-      headers: { Accept: 'application/json' },
-    });
-  }
+  private readonly baseUrl = 'https://api.insee.fr/api-sirene/3.11';
 
   get isConfigured(): boolean {
     const key = this.configService.get<string>('insee.apiKey');
@@ -79,22 +70,25 @@ export class InseeApiClient {
 
     const apiKey = this.configService.get<string>('insee.apiKey')!;
     const offset = (page - 1) * pageSize;
-    // Requête simplifiée : filtrage sur date de création uniquement
-    // (le filtre nested periodesUniteLegale cause des erreurs sur certains plans)
     const q = `dateCreationUniteLegale:[${dateMin} TO ${dateMax}]`;
 
     this.logger.debug(`[findRecent] q="${q}" nombre=${pageSize} debut=${offset}`);
 
-    // L'API Sirene INSEE accepte la clé via deux headers selon le plan :
-    // - "api key" plan : X-INSEE-Api-Key-Integration (header direct, pas d'OAuth2)
-    // - OAuth2 plan   : Authorization: Bearer {token}
-    const { data } = await this.api.get<InseeSearchResponse>('/siren', {
-      params: { q, nombre: pageSize, debut: offset },
+    const params = new URLSearchParams({ q, nombre: String(pageSize), debut: String(offset) });
+    const response = await fetch(`${this.baseUrl}/siren?${params}`, {
+      signal: AbortSignal.timeout(20_000),
       headers: {
+        Accept: 'application/json',
         'X-INSEE-Api-Key-Integration': apiKey,
         Authorization: `Bearer ${apiKey}`,
       },
     });
+
+    if (!response.ok) {
+      throw new Error(`INSEE API HTTP ${response.status}`);
+    }
+
+    const data = (await response.json()) as InseeSearchResponse;
 
     if (data.header?.statut !== 200) {
       throw new Error(`INSEE API erreur ${data.header?.statut}: ${data.header?.message}`);

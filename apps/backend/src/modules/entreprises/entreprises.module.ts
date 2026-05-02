@@ -1,5 +1,4 @@
 import { Module } from '@nestjs/common';
-import { HttpModule } from '@nestjs/axios';
 
 import { EntreprisesController } from './presentation/entreprises.controller';
 import { EntreprisesService } from './application/entreprises.service';
@@ -22,7 +21,6 @@ import { InseeApiMapper } from './infrastructure/mappers/insee-api.mapper';
  * le service dépend de l'interface, NestJS injecte l'implémentation concrète.
  */
 @Module({
-  imports: [HttpModule],
   controllers: [EntreprisesController],
   providers: [
     // Application

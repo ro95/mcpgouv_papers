@@ -1,5 +1,4 @@
 import { Injectable, Logger } from '@nestjs/common';
-import axios, { AxiosInstance } from 'axios';
 
 // ─────────────────────────────────────────────
 // Types bruts renvoyés par l'API tabulaire
@@ -57,24 +56,10 @@ const CANDIDATE_DATASETS = [
 export class SireneTabularClient {
   private readonly logger = new Logger(SireneTabularClient.name);
 
-  private readonly datagouvApi: AxiosInstance;
-  private readonly tabularApi: AxiosInstance;
+  private readonly datagouvBaseUrl = 'https://www.data.gouv.fr/api/1';
+  private readonly tabularBaseUrl = 'https://tabular-api.data.gouv.fr';
 
   private cachedResourceId: string | null = null;
-
-  constructor() {
-    this.datagouvApi = axios.create({
-      baseURL: 'https://www.data.gouv.fr/api/1',
-      timeout: 12_000,
-      headers: { Accept: 'application/json', 'User-Agent': 'api-entreprises/1.0' },
-    });
-
-    this.tabularApi = axios.create({
-      baseURL: 'https://tabular-api.data.gouv.fr',
-      timeout: 20_000,
-      headers: { Accept: 'application/json' },
-    });
-  }
 
   // ─────────────────────────────────────────────
   // API publique
@@ -92,27 +77,24 @@ export class SireneTabularClient {
       `[findRecent] resource=${resourceId} range=[${dateMin}, ${dateMax}] page=${page}`,
     );
 
-    const response = await this.tabularApi.get<TabularApiResponse>(
-      `/api/resources/${resourceId}/data/`,
-      {
-        params: {
-          dateCreationUniteLegale__gte: dateMin,
-          dateCreationUniteLegale__lte: dateMax,
-          etatAdministratifUniteLegale: 'A',
-          page,
-          page_size: pageSize,
-          // Note : order_by n'est pas supporté par l'API tabulaire data.gouv.fr
-        },
-      },
+    const params = new URLSearchParams({
+      dateCreationUniteLegale__gte: dateMin,
+      dateCreationUniteLegale__lte: dateMax,
+      etatAdministratifUniteLegale: 'A',
+      page: String(page),
+      page_size: String(pageSize),
+    });
+    const response = await this.tabularFetch<TabularApiResponse>(
+      `/api/resources/${resourceId}/data/?${params}`,
     );
 
-    if (!response.data?.data) {
+    if (!response?.data) {
       throw new Error(
         `API tabulaire: réponse inattendue (resource=${resourceId})`,
       );
     }
 
-    return response.data;
+    return response;
   }
 
   // ─────────────────────────────────────────────
@@ -145,9 +127,7 @@ export class SireneTabularClient {
   }
 
   private async tryResolveFromDataset(slug: string): Promise<string | null> {
-    const { data } = await this.datagouvApi.get<DatagouvDataset>(
-      `/datasets/${slug}/`,
-    );
+    const data = await this.datagouvFetch<DatagouvDataset>(`/datasets/${slug}/`);
 
     const resources = data.resources ?? [];
 
@@ -169,11 +149,33 @@ export class SireneTabularClient {
     }
 
     // Vérifier que l'API tabulaire expose bien cette ressource
-    await this.tabularApi.head(`/api/resources/${csvResource.id}/data/`);
+    const headRes = await fetch(
+      `${this.tabularBaseUrl}/api/resources/${csvResource.id}/data/`,
+      { method: 'HEAD', signal: AbortSignal.timeout(12_000) },
+    );
+    if (!headRes.ok) return null;
 
     this.logger.log(
       `Resource SIRENE trouvée : ${csvResource.id} (${csvResource.title}) dans "${slug}"`,
     );
     return csvResource.id;
+  }
+
+  private async datagouvFetch<T>(path: string): Promise<T> {
+    const response = await fetch(`${this.datagouvBaseUrl}${path}`, {
+      signal: AbortSignal.timeout(12_000),
+      headers: { Accept: 'application/json', 'User-Agent': 'api-entreprises/1.0' },
+    });
+    if (!response.ok) throw new Error(`data.gouv HTTP ${response.status}`);
+    return response.json() as Promise<T>;
+  }
+
+  private async tabularFetch<T>(path: string): Promise<T> {
+    const response = await fetch(`${this.tabularBaseUrl}${path}`, {
+      signal: AbortSignal.timeout(20_000),
+      headers: { Accept: 'application/json' },
+    });
+    if (!response.ok) throw new Error(`Tabular API HTTP ${response.status}`);
+    return response.json() as Promise<T>;
   }
 }
