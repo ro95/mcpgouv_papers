@@ -1,6 +1,12 @@
 import { Injectable } from '@nestjs/common';
 import { Entreprise, PaginatedEntreprises } from '../../domain/entreprise.entity';
-import type { InseeUniteLegale, InseePeriode, InseeSearchResponse } from '../http-clients/insee-api.client';
+import type {
+  InseeUniteLegale,
+  InseePeriode,
+  InseeSearchResponse,
+  InseeEtablissement,
+  InseeSiretResponse,
+} from '../http-clients/insee-api.client';
 import { SireneTabularMapper } from './sirene-tabular.mapper';
 
 /**
@@ -44,6 +50,80 @@ export class InseeApiMapper {
       [],
       currentPeriod?.categorieJuridiqueUniteLegale ?? null,
     );
+  }
+
+  /**
+   * Mapping spécifique pour les réponses /siret.
+   * /siret retourne les champs uniteLegale à plat (pas via periodesUniteLegale).
+   */
+  toEntityFromEtablissement(eta: InseeEtablissement): Entreprise {
+    const ul = eta.uniteLegale;
+    const naf = ul.activitePrincipaleUniteLegale ?? '';
+    const nom = this.resolveFlatNom(ul, eta.siren);
+    const ad = eta.adresseEtablissement;
+    const cp = ad.codePostalEtablissement ?? '';
+    const departement = cp.length >= 2 ? cp.substring(0, 2) : '';
+    const adresse = [
+      ad.numeroVoieEtablissement,
+      ad.typeVoieEtablissement,
+      ad.libelleVoieEtablissement,
+    ]
+      .filter(Boolean)
+      .join(' ');
+
+    return new Entreprise(
+      eta.siren,
+      nom,
+      ul.dateCreationUniteLegale ?? '',
+      naf,
+      this.nafMapper.resolveLibelleNaf(naf),
+      ul.categorieEntreprise ?? null,
+      ul.etatAdministratifUniteLegale ?? 'A',
+      {
+        siret: eta.siret,
+        codePostal: cp,
+        libelleCommune: ad.libelleCommuneEtablissement ?? '',
+        departement,
+        region: '',
+        adresse,
+      },
+      1,
+      1,
+      ul.trancheEffectifsUniteLegale ?? null,
+      null,
+      [],
+      ul.categorieJuridiqueUniteLegale ?? null,
+    );
+  }
+
+  private resolveFlatNom(
+    ul: InseeEtablissement['uniteLegale'],
+    siren: string,
+  ): string {
+    if (ul.denominationUniteLegale) return ul.denominationUniteLegale;
+    if (ul.denominationUsuelle1UniteLegale) return ul.denominationUsuelle1UniteLegale;
+    if (ul.nomUniteLegale) {
+      const prenom = ul.prenomUsuelUniteLegale ? `${ul.prenomUsuelUniteLegale} ` : '';
+      return `${prenom}${ul.nomUniteLegale}`.trim();
+    }
+    return ul.statutDiffusionUniteLegale === 'P'
+      ? `[Diffusion partielle — SIREN ${siren}]`
+      : siren;
+  }
+
+  toPaginatedFromSiret(raw: InseeSiretResponse): PaginatedEntreprises {
+    const total = raw.header?.total ?? 0;
+    const pageSize = raw.header?.nombre ?? 20;
+    const offset = raw.header?.debut ?? 0;
+    const page = Math.floor(offset / pageSize) + 1;
+
+    return {
+      results: (raw.etablissements ?? []).map((e) => this.toEntityFromEtablissement(e)),
+      totalResults: total,
+      page,
+      perPage: pageSize,
+      totalPages: Math.ceil(total / pageSize),
+    };
   }
 
   toPaginated(raw: InseeSearchResponse): PaginatedEntreprises {

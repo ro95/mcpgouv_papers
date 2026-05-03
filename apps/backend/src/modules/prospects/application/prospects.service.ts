@@ -112,12 +112,9 @@ export class ProspectsService {
   }
 
   /**
-   * Récupère les nouveaux entrants en fenêtre de date depuis INSEE.
-   *
-   * Note : recherche-entreprises.api.gouv.fr n'indexe pas les SIRENs récents
-   * (lag de 6+ mois). Donc pas d'enrichissement siege/dirigeants possible.
-   * On retourne ce que INSEE expose : SIREN, nom, date, NAF.
-   * Le filtre département n'est pas appliqué (nécessiterait une requête /siret par SIREN).
+   * Récupère les nouveaux entrants depuis INSEE /siret.
+   * /siret donne en une requête : date filter + département (via codePostal*) + siege complet.
+   * recherche-entreprises a un lag d'indexation de 6+ mois — inutilisable pour les nouveaux entrants.
    */
   private async fetchInDateRange(
     dateMin: string,
@@ -128,17 +125,26 @@ export class ProspectsService {
       throw new Error('INSEE_API_KEY manquant — requis pour le filtrage date.');
     }
 
-    const insee = await this.inseeClient.findRecent(dateMin, dateMax, 1, this.INSEE_PAGE_SIZE);
-    const totalInsee = insee.unitesLegales?.length ?? 0;
-    this.logger.log(`[insee] ${totalInsee} SIRENs en fenêtre [${dateMin}, ${dateMax}]`);
+    const insee = await this.inseeClient.findRecentSieges(
+      dateMin,
+      dateMax,
+      dto.departement ?? null,
+      1,
+      this.INSEE_PAGE_SIZE,
+    );
+    const totalInsee = insee.etablissements?.length ?? 0;
+    this.logger.log(
+      `[insee] ${totalInsee} sièges en fenêtre [${dateMin}, ${dateMax}]` +
+        (dto.departement ? ` dans dept ${dto.departement}` : ''),
+    );
 
     const nafPrefixes = dto.sectionActivite
       ? SECTION_NAF_PREFIXES[dto.sectionActivite.toUpperCase()] ?? []
       : [];
     const nafFilter = dto.activitePrincipale ?? null;
 
-    const filtered = (insee.unitesLegales ?? [])
-      .map((u) => this.inseeMapper.toEntity(u))
+    const filtered = (insee.etablissements ?? [])
+      .map((e) => this.inseeMapper.toEntityFromEtablissement(e))
       .filter((e) => {
         if (nafFilter && e.activitePrincipale !== nafFilter) return false;
         if (nafPrefixes.length > 0 && !nafPrefixes.some((p) => e.activitePrincipale.startsWith(p))) return false;
@@ -147,8 +153,7 @@ export class ProspectsService {
       .slice(0, this.MAX_PER_SECTION);
 
     this.logger.log(
-      `[filter-naf] ${filtered.length} entreprises après filtre section ${dto.sectionActivite ?? '*'}` +
-        (dto.departement ? ' (note: filtre département non appliqué — requiert /siret)' : ''),
+      `[filter-naf] ${filtered.length} entreprises après filtre section ${dto.sectionActivite ?? '*'}`,
     );
 
     return filtered;

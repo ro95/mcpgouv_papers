@@ -21,7 +21,12 @@ const SECTIONS = [
   { code: 'M', label: 'Conseil & services pros' },
   { code: 'Q', label: 'Santé libérale' },
   { code: 'G', label: 'Commerce' },
+  { code: 'J', label: 'Tech / IT / médias' },
 ];
+
+// Filtre département via env var TARGET_DEPARTEMENT (ex: "93" pour Seine-Saint-Denis).
+// Vide = scan national (jusqu'à 200 résultats par section).
+const TARGET_DEPARTEMENT = process.env.TARGET_DEPARTEMENT?.trim() || undefined;
 
 interface SectionResult {
   section: { code: string; label: string };
@@ -46,6 +51,7 @@ async function main() {
           ageMinDays: 90,
           ageMaxDays: 270,
           sectionActivite: section.code,
+          departement: TARGET_DEPARTEMENT,
           probeWebsite: true,
           runLighthouse: false,
           minScore: 5,
@@ -87,6 +93,10 @@ function buildReport(sectionResults: SectionResult[]): string {
   const lines: string[] = [];
   lines.push(`# 🎯 Prospects hot — semaine du ${today}`);
   lines.push('');
+  if (TARGET_DEPARTEMENT) {
+    lines.push(`**Zone ciblée** : département ${TARGET_DEPARTEMENT}`);
+    lines.push('');
+  }
   lines.push(`**Résumé** : ${hot.length} hot · ${warm.length} warm · ${cold.length} cold · ${totalScanned} entreprises scannées au total`);
   lines.push('');
   lines.push(`Sections couvertes : ${sectionResults.map((s) => `${s.section.code} (${s.prospects.length})`).join(' · ')}`);
@@ -97,6 +107,50 @@ function buildReport(sectionResults: SectionResult[]): string {
     lines.push('');
   }
 
+  const renderWebsite = (w: Prospect['website']): string[] => {
+    if (!w) return ['- **Site web** : _non sondé_'];
+
+    if (w.verdict === 'no-site') {
+      return [
+        `- **Site web** : ❌ **Aucun site détecté**`,
+        `  - Domaines testés : \`${w.domainTried}\` (.fr, .com)`,
+        `  - 💡 Opportunité : pas de présence web → leur proposer la création complète`,
+      ];
+    }
+
+    if (w.verdict === 'obsolete') {
+      const url = w.finalUrl ?? `https://${w.domainTried}`;
+      const reasons: string[] = [];
+      if (!w.https) reasons.push(`  - ❌ Pas de HTTPS — site insécurisé (Chrome affiche un avertissement)`);
+      if (!w.hasViewport) reasons.push(`  - ❌ Pas de viewport responsive — cassé sur mobile`);
+      if (w.usesJquery) reasons.push(`  - ❌ Utilise jQuery — stack datée (2010s)`);
+      if (w.copyrightYear !== null && w.copyrightYear < 2022) {
+        reasons.push(`  - ❌ Copyright \`${w.copyrightYear}\` — jamais mis à jour depuis ${new Date().getFullYear() - w.copyrightYear} ans`);
+      }
+      if (w.performanceScore !== null && w.performanceScore < 50) {
+        reasons.push(`  - ❌ Lighthouse perf \`${w.performanceScore}/100\` — site lent`);
+      }
+      if (w.seoScore !== null && w.seoScore < 70) {
+        reasons.push(`  - ❌ Lighthouse SEO \`${w.seoScore}/100\` — mauvais référencement`);
+      }
+      return [
+        `- **Site web** : ⚠️ Site **obsolète** : ${url}`,
+        ...reasons,
+        `  - 💡 Opportunité : refonte complète — visibles mais perdent en crédibilité face aux concurrents modernes`,
+      ];
+    }
+
+    const url = w.finalUrl ?? `https://${w.domainTried}`;
+    const scores: string[] = [];
+    if (w.performanceScore !== null) scores.push(`perf ${w.performanceScore}`);
+    if (w.seoScore !== null) scores.push(`SEO ${w.seoScore}`);
+    if (w.bestPracticesScore !== null) scores.push(`bonnes pratiques ${w.bestPracticesScore}`);
+    return [
+      `- **Site web** : ✅ Site moderne : ${url}` +
+        (scores.length ? ` (Lighthouse : ${scores.join(' · ')})` : ''),
+    ];
+  };
+
   const renderProspect = (p: typeof allProspects[number], idx: number): string => {
     const e = p.entreprise;
     const dirigeant = e.dirigeants?.[0];
@@ -104,13 +158,7 @@ function buildReport(sectionResults: SectionResult[]): string {
       ? `${dirigeant.prenom ?? ''} ${dirigeant.nom}${dirigeant.qualite ? ` (${dirigeant.qualite})` : ''}`.trim()
       : '_inconnu_';
 
-    const websiteText = !p.website
-      ? '_non sondé_'
-      : p.website.verdict === 'no-site'
-      ? `❌ **Aucun site détecté** (essayé : \`${p.website.domainTried}\`)`
-      : p.website.verdict === 'obsolete'
-      ? `⚠️ Site obsolète : \`${p.website.finalUrl ?? p.website.domainTried}\` (score obs. ${p.website.obsolescenceScore})`
-      : `✅ Site moderne : \`${p.website.finalUrl ?? p.website.domainTried}\``;
+    const websiteBlock = renderWebsite(p.website);
 
     const breakdown = Object.entries(p.score.breakdown)
       .map(([k, v]) => `${k}=+${v}`)
@@ -131,7 +179,7 @@ function buildReport(sectionResults: SectionResult[]): string {
     block.push(`- **Ville** : ${villeText}`);
     if (dirigeant) block.push(`- **Dirigeant** : ${dirText}`);
     block.push(`- **Créée le** : ${e.dateCreation} (${e.ancienneteJours} jours)`);
-    block.push(`- **Site web** : ${websiteText}`);
+    block.push(...websiteBlock);
     block.push(`- **Score breakdown** : ${breakdown || '_aucun_'}`);
     block.push(`- **Recherche complémentaire** : [annuaire-entreprises](${annuaireUrl}) · [Pappers](${pappersUrl})`);
     block.push('');

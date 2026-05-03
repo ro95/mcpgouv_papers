@@ -32,6 +32,56 @@ export interface InseeSearchResponse {
   unitesLegales: InseeUniteLegale[];
 }
 
+// ─── Types /siret ───────────────────────────────
+
+export interface InseeAdresseEtablissement {
+  numeroVoieEtablissement: string | null;
+  typeVoieEtablissement: string | null;
+  libelleVoieEtablissement: string | null;
+  codePostalEtablissement: string | null;
+  libelleCommuneEtablissement: string | null;
+  codeCommuneEtablissement: string | null;
+}
+
+export interface InseePeriodeEtablissement {
+  dateFin: string | null;
+  dateDebut: string;
+  etatAdministratifEtablissement: 'A' | 'F';
+  activitePrincipaleEtablissement: string | null;
+  denominationUsuelleEtablissement: string | null;
+}
+
+/**
+ * uniteLegale renvoyé par /siret : les champs courants sont à plat (pas dans periodesUniteLegale).
+ */
+export interface InseeUniteLegaleFlat {
+  etatAdministratifUniteLegale: 'A' | 'C';
+  statutDiffusionUniteLegale: 'O' | 'P';
+  dateCreationUniteLegale: string;
+  categorieJuridiqueUniteLegale: string | null;
+  denominationUniteLegale: string | null;
+  denominationUsuelle1UniteLegale: string | null;
+  nomUniteLegale: string | null;
+  prenomUsuelUniteLegale: string | null;
+  activitePrincipaleUniteLegale: string | null;
+  trancheEffectifsUniteLegale: string | null;
+  categorieEntreprise: string | null;
+}
+
+export interface InseeEtablissement {
+  siret: string;
+  siren: string;
+  etablissementSiege: boolean;
+  uniteLegale: InseeUniteLegaleFlat;
+  adresseEtablissement: InseeAdresseEtablissement;
+  periodesEtablissement: InseePeriodeEtablissement[];
+}
+
+export interface InseeSiretResponse {
+  header: { statut: number; message: string; total: number; debut: number; nombre: number };
+  etablissements: InseeEtablissement[];
+}
+
 // ─────────────────────────────────────────────
 // Client INSEE API Sirene V3.11
 //
@@ -94,6 +144,61 @@ export class InseeApiClient {
 
     if (data.header?.statut !== 200) {
       throw new Error(`INSEE API erreur ${data.header?.statut}: ${data.header?.message}`);
+    }
+
+    return data;
+  }
+
+  /**
+   * Cherche les établissements siège créés dans une fenêtre de dates,
+   * avec filtre département optionnel (via codePostalEtablissement:XX*).
+   *
+   * Avantage par rapport à findRecent (/siren) : récupère le siege complet
+   * (commune, code postal, dept) en une seule requête.
+   */
+  async findRecentSieges(
+    dateMin: string,
+    dateMax: string,
+    departement: string | null,
+    page: number,
+    pageSize: number,
+  ): Promise<InseeSiretResponse> {
+    if (!this.isConfigured) {
+      throw new Error('INSEE_API_KEY manquant dans .env.');
+    }
+
+    const apiKey = this.configService.get<string>('insee.apiKey')!;
+    const offset = (page - 1) * pageSize;
+
+    const queryParts = [
+      `dateCreationUniteLegale:[${dateMin} TO ${dateMax}]`,
+      'etablissementSiege:true',
+    ];
+    if (departement) {
+      queryParts.push(`codePostalEtablissement:${departement.padStart(2, '0')}*`);
+    }
+    const q = queryParts.join(' AND ');
+
+    this.logger.debug(`[findRecentSieges] q="${q}" nombre=${pageSize} debut=${offset}`);
+
+    const params = new URLSearchParams({ q, nombre: String(pageSize), debut: String(offset) });
+    const response = await fetch(`${this.baseUrl}/siret?${params}`, {
+      signal: AbortSignal.timeout(20_000),
+      headers: {
+        Accept: 'application/json',
+        'X-INSEE-Api-Key-Integration': apiKey,
+        Authorization: `Bearer ${apiKey}`,
+      },
+    });
+
+    if (!response.ok) {
+      throw new Error(`INSEE /siret HTTP ${response.status}`);
+    }
+
+    const data = (await response.json()) as InseeSiretResponse;
+
+    if (data.header?.statut !== 200) {
+      throw new Error(`INSEE /siret erreur ${data.header?.statut}: ${data.header?.message}`);
     }
 
     return data;
