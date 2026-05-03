@@ -36,12 +36,18 @@ export interface PappersEntreprise {
  *  - 1 token par appel GET /entreprise
  *  - +1 token si champs_supplementaires contient « email,telephone »
  */
+export interface PappersResult<T> {
+  data: T;
+  cost: number;
+}
+
 @Injectable()
 export class PappersClient {
   private readonly logger = new Logger(PappersClient.name);
   private readonly baseUrl: string;
   private readonly apiKey: string;
   private readonly configured: boolean;
+  private cumulativeCost = 0;
 
   constructor(private readonly configService: ConfigService) {
     this.apiKey = this.configService.get<string>('pappers.apiKey') ?? '';
@@ -55,32 +61,41 @@ export class PappersClient {
     }
   }
 
-  /** Vérifie si la clé Pappers est configurée. */
   get isConfigured(): boolean {
     return this.configured;
   }
 
-  /**
-   * Enrichit une entreprise par son SIREN.
-   * Retourne les données de contact + financières.
-   *
-   * @param siren - Numéro SIREN à 9 chiffres
-   * @returns Données enrichies ou null si non configuré / erreur
-   */
+  /** Total des crédits consommés depuis le démarrage du process. */
+  get totalCost(): number {
+    return this.cumulativeCost;
+  }
+
+  resetCost(): void {
+    this.cumulativeCost = 0;
+  }
+
   async getEntreprise(siren: string): Promise<PappersEntreprise | null> {
+    const result = await this.getEntrepriseWithCost(siren);
+    return result?.data ?? null;
+  }
+
+  /**
+   * Variante qui retourne data + coût en crédits Pappers (header x-request-cost).
+   * Le coût varie selon la taille de la réponse (1 pour TPE, 4-7 pour grosses entreprises).
+   */
+  async getEntrepriseWithCost(siren: string): Promise<PappersResult<PappersEntreprise> | null> {
     if (!this.configured) return null;
 
     const params = new URLSearchParams({
       api_token: this.apiKey,
       siren,
-      // Champs supplémentaires : email + téléphone (+1 token)
       champs_supplementaires: 'email,telephone,site_web',
     });
 
     try {
-      const data = await this.fetchJson<PappersEntreprise>(`/entreprise?${params}`);
-      this.logger.debug(`[getEntreprise] SIREN ${siren} → OK`);
-      return data;
+      const result = await this.fetchJsonWithCost<PappersEntreprise>(`/entreprise?${params}`);
+      this.logger.debug(`[getEntreprise] SIREN ${siren} → OK (coût=${result.cost})`);
+      return result;
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       this.logger.error(`[getEntreprise] SIREN ${siren} → ${message}`);
@@ -88,7 +103,7 @@ export class PappersClient {
     }
   }
 
-  private async fetchJson<T>(path: string): Promise<T> {
+  private async fetchJsonWithCost<T>(path: string): Promise<PappersResult<T>> {
     const url = `${this.baseUrl}${path}`;
     const response = await fetch(url, {
       signal: AbortSignal.timeout(15_000),
@@ -103,6 +118,9 @@ export class PappersClient {
       throw new Error(`HTTP ${response.status}: ${body}`);
     }
 
-    return response.json() as Promise<T>;
+    const cost = parseInt(response.headers.get('x-request-cost') ?? '0', 10) || 0;
+    this.cumulativeCost += cost;
+    const data = (await response.json()) as T;
+    return { data, cost };
   }
 }

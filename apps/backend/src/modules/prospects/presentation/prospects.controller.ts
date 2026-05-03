@@ -3,6 +3,7 @@ import { ApiOperation, ApiParam, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { ProspectsService } from '../application/prospects.service';
 import { EntreprisesService } from '../../entreprises/application/entreprises.service';
 import { NouveauxEntrantsQueryDto } from '../application/dto/nouveaux-entrants.query.dto';
+import { SitesObsoletesQueryDto } from '../application/dto/sites-obsoletes.query.dto';
 import {
   PaginatedProspectsDto,
   ProspectDto,
@@ -36,6 +37,30 @@ export class ProspectsController {
       totalAfterFilter: result.totalAfterFilter,
       page: result.page,
       perPage: result.perPage,
+    };
+  }
+
+  @Get('sites-obsoletes')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Sites obsolètes (entreprises établies)',
+    description:
+      "Cible les entreprises établies (3-15 ans) en dept donné, enrichit via Pappers " +
+      "(email + tel + site web), probe le vrai site, ne garde que les obsolètes. " +
+      'Filtre dur par défaut : email + tel + site requis. Budget Pappers configurable.',
+  })
+  async sitesObsoletes(@Query() query: SitesObsoletesQueryDto) {
+    const result = await this.service.findSitesObsoletes(query);
+    return {
+      results: result.results.map((p) => this.toDto(p)),
+      meta: {
+        totalScanned: result.totalScanned,
+        totalEnrichedPappers: result.totalEnrichedPappers,
+        pappersBudgetUsed: result.pappersBudgetUsed,
+        pappersBudgetCap: result.pappersBudgetCap,
+        page: result.page,
+        perPage: result.perPage,
+      },
     };
   }
 
@@ -73,6 +98,7 @@ export class ProspectsController {
       },
       score: p.score,
       website: p.website,
+      pappers: p.pappers,
     };
   }
 }

@@ -2,11 +2,15 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Entreprise } from '../../entreprises/domain/entreprise.entity';
 import { InseeApiClient } from '../../entreprises/infrastructure/http-clients/insee-api.client';
 import { InseeApiMapper } from '../../entreprises/infrastructure/mappers/insee-api.mapper';
-import { Prospect, WebsiteSignals } from '../domain/prospect.entity';
+import { RechercheEntreprisesClient } from '../../entreprises/infrastructure/http-clients/recherche-entreprises.client';
+import { EntrepriseApiMapper } from '../../entreprises/infrastructure/mappers/entreprise-api.mapper';
+import { PappersClient } from '../../entreprises/infrastructure/http-clients/pappers.client';
+import { Prospect, WebsiteSignals, PappersContact } from '../domain/prospect.entity';
 import { ScoringService } from './scoring.service';
 import { WebsiteProbeClient } from '../infrastructure/website-probe.client';
 import { PageSpeedClient } from '../infrastructure/pagespeed.client';
 import { NouveauxEntrantsQueryDto } from './dto/nouveaux-entrants.query.dto';
+import { SitesObsoletesQueryDto } from './dto/sites-obsoletes.query.dto';
 
 interface NouveauxEntrantsResult {
   results: Prospect[];
@@ -51,6 +55,9 @@ export class ProspectsService {
   constructor(
     private readonly inseeClient: InseeApiClient,
     private readonly inseeMapper: InseeApiMapper,
+    private readonly searchClient: RechercheEntreprisesClient,
+    private readonly searchMapper: EntrepriseApiMapper,
+    private readonly pappersClient: PappersClient,
     private readonly scoring: ScoringService,
     private readonly probe: WebsiteProbeClient,
     private readonly pagespeed: PageSpeedClient,
@@ -215,5 +222,161 @@ export class ProspectsService {
         }),
       );
     }
+  }
+
+  // ─────────────────────────────────────────────
+  // Plan B — sites obsolètes (entreprises établies)
+  // ─────────────────────────────────────────────
+
+  async findSitesObsoletes(dto: SitesObsoletesQueryDto): Promise<{
+    results: Prospect[];
+    totalScanned: number;
+    totalEnrichedPappers: number;
+    pappersBudgetUsed: number;
+    pappersBudgetCap: number;
+    page: number;
+    perPage: number;
+  }> {
+    if (!this.pappersClient.isConfigured) {
+      throw new Error('PAPPERS_API_KEY manquant — requis pour le pipeline sites-obsoletes.');
+    }
+
+    const budget = dto.pappersBudget ?? 60;
+    const maxEnrich = dto.maxEnrich ?? 50;
+    const initialCost = this.pappersClient.totalCost;
+
+    const candidates = await this.fetchEstablishedCandidates(dto);
+    this.logger.log(`[sites-obsoletes] ${candidates.length} candidats récupérés`);
+
+    const enriched: Array<{ entreprise: Entreprise; pappers: PappersContact; signals: WebsiteSignals | null }> = [];
+    let enrichedCount = 0;
+    let stoppedReason = '';
+
+    for (const entreprise of candidates) {
+      if (enrichedCount >= maxEnrich) {
+        stoppedReason = `max ${maxEnrich} enrichissements atteint`;
+        break;
+      }
+      const usedSoFar = this.pappersClient.totalCost - initialCost;
+      if (usedSoFar >= budget) {
+        stoppedReason = `budget Pappers ${budget} crédits atteint`;
+        break;
+      }
+
+      try {
+        const result = await this.pappersClient.getEntrepriseWithCost(entreprise.siren);
+        enrichedCount++;
+        if (!result) continue;
+        const contact: PappersContact = {
+          email: result.data.email ?? null,
+          telephone: result.data.telephone ?? null,
+          siteWeb: result.data.site_web ?? null,
+          cost: result.cost,
+        };
+
+        // Filtre minimal : au moins un moyen de contact
+        if (dto.requireFullContact ?? true) {
+          if (!contact.email && !contact.telephone) continue;
+        }
+
+        // Probe le site : Pappers d'abord, sinon heuristique sur le nom
+        const signals = await this.probe.probeFromName(
+          entreprise.nomRaisonSociale,
+          contact.siteWeb,
+        );
+        if (dto.runLighthouse && signals.reachable && signals.finalUrl) {
+          const scores = await this.pagespeed.getScores(signals.finalUrl);
+          if (scores) {
+            signals.performanceScore = scores.performance;
+            signals.seoScore = scores.seo;
+            signals.bestPracticesScore = scores.bestPractices;
+            if (scores.performance !== null && scores.performance < 50) {
+              signals.obsolescenceScore += 3;
+              if (signals.verdict === 'modern') signals.verdict = 'obsolete';
+            }
+          }
+        }
+
+        enriched.push({ entreprise, pappers: contact, signals });
+      } catch (err) {
+        this.logger.warn(
+          `[pappers] SIREN ${entreprise.siren} échec : ${err instanceof Error ? err.message : err}`,
+        );
+      }
+    }
+
+    const usedFinal = this.pappersClient.totalCost - initialCost;
+    this.logger.log(
+      `[sites-obsoletes] ${enrichedCount} enrichissements, ${usedFinal}/${budget} crédits` +
+        (stoppedReason ? ` (arrêt : ${stoppedReason})` : ''),
+    );
+
+    // On garde tous les enrichis avec contact valide ; le rapport montre le verdict site comme info
+    const prospects = enriched.map(({ entreprise, signals, pappers }) => {
+      const score = this.scoring.score(entreprise, signals);
+      return new Prospect(entreprise, score, signals, pappers);
+    });
+
+    prospects.sort((a, b) => b.score.total - a.score.total);
+
+    const page = dto.page ?? 1;
+    const perPage = dto.perPage ?? 30;
+    const start = (page - 1) * perPage;
+    return {
+      results: prospects.slice(start, start + perPage),
+      totalScanned: candidates.length,
+      totalEnrichedPappers: enrichedCount,
+      pappersBudgetUsed: usedFinal,
+      pappersBudgetCap: budget,
+      page,
+      perPage,
+    };
+  }
+
+  /**
+   * Récupère les entreprises actives en dept + section via recherche-entreprises.
+   * On cible 3-15 ans : assez vieilles pour avoir un site, assez jeunes pour être
+   * encore pertinentes pour une refonte.
+   */
+  private async fetchEstablishedCandidates(
+    dto: SitesObsoletesQueryDto,
+  ): Promise<Entreprise[]> {
+    const now = new Date();
+    const cutoffMaxAge = new Date(now);
+    cutoffMaxAge.setFullYear(now.getFullYear() - 15);
+    const cutoffMinAge = new Date(now);
+    cutoffMinAge.setFullYear(now.getFullYear() - 3);
+    const dateMin = cutoffMaxAge.toISOString().split('T')[0];
+    const dateMax = cutoffMinAge.toISOString().split('T')[0];
+
+    const accumulated: Entreprise[] = [];
+    const PAGE_SIZE = 25;
+    const MAX_PAGES = 8;
+
+    for (let page = 1; page <= MAX_PAGES; page++) {
+      const raw = await this.searchClient.search({
+        per_page: PAGE_SIZE,
+        page,
+        etat_administratif: 'A',
+        departement: dto.departement,
+        section_activite_principale: dto.sectionActivite,
+        activite_principale: dto.activitePrincipale,
+        // Cible TPE/PME 1-49 salariés (codes 01..12)
+        tranche_effectif_salarie: '01,02,03,11,12',
+      });
+
+      const filtered = raw.results
+        .map((r) => this.searchMapper.toEntity(r))
+        .filter((e) => e.dateCreation >= dateMin && e.dateCreation <= dateMax)
+        // Post-filter dept : le filtre côté API recherche-entreprises est imprécis
+        .filter((e) => !dto.departement || e.siege?.departement === dto.departement);
+
+      accumulated.push(...filtered);
+
+      if (raw.results.length < PAGE_SIZE) break;
+      if (accumulated.length >= 200) break;
+    }
+
+    return accumulated;
   }
 }

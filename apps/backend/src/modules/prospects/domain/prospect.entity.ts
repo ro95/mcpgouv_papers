@@ -23,10 +23,18 @@ export interface ProspectScore {
   tier: 'cold' | 'warm' | 'hot';
 }
 
+export interface PappersContact {
+  email: string | null;
+  telephone: string | null;
+  siteWeb: string | null;
+  cost: number;
+}
+
 export class Prospect {
   constructor(
     public readonly entreprise: Entreprise,
     public readonly score: ProspectScore,
     public readonly website: WebsiteSignals | null,
+    public readonly pappers: PappersContact | null = null,
   ) {}
 }

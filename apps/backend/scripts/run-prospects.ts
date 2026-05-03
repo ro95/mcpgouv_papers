@@ -28,6 +28,17 @@ const SECTIONS = [
 // Vide = scan national (jusqu'à 200 résultats par section).
 const TARGET_DEPARTEMENT = process.env.TARGET_DEPARTEMENT?.trim() || undefined;
 
+// Mode du pipeline :
+//  - "nouveaux-entrants" (default) : Plan A — entreprises 3-9 mois sans site
+//  - "sites-obsoletes" : Plan B — entreprises 3-15 ans avec sites obsolètes (Pappers requis)
+const MODE = (process.env.MODE?.trim() || 'nouveaux-entrants') as 'nouveaux-entrants' | 'sites-obsoletes';
+
+// Budget Pappers en crédits pour le mode sites-obsoletes.
+const PAPPERS_BUDGET = parseInt(process.env.PAPPERS_BUDGET ?? '60', 10);
+
+// Filtre dur (email + tel + site requis). Mettre "false" pour mode diagnostic.
+const REQUIRE_FULL_CONTACT = process.env.REQUIRE_FULL_CONTACT !== 'false';
+
 interface SectionResult {
   section: { code: string; label: string };
   prospects: Prospect[];
@@ -43,35 +54,82 @@ async function main() {
   try {
     const service = app.get(ProspectsService);
 
+    interface PappersMeta { used: number; cap: number; enriched: number }
     const sectionResults: SectionResult[] = [];
+    let pappersMeta: PappersMeta | null = null;
+
     for (const section of SECTIONS) {
-      logger.log(`▶️  Section ${section.code} — ${section.label}`);
+      logger.log(`▶️  Section ${section.code} — ${section.label} (mode: ${MODE})`);
       try {
-        const res = await service.findNouveauxEntrants({
-          ageMinDays: 90,
-          ageMaxDays: 270,
-          sectionActivite: section.code,
-          departement: TARGET_DEPARTEMENT,
-          probeWebsite: true,
-          runLighthouse: false,
-          minScore: 5,
-          page: 1,
-          perPage: 50,
-        });
-        sectionResults.push({
-          section,
-          prospects: res.results,
-          totalScanned: res.totalScanned,
-        });
-        logger.log(
-          `   ✅ ${res.results.length} leads (${res.totalAfterFilter} ≥5 / ${res.totalScanned} scannés)`,
-        );
+        if (MODE === 'sites-obsoletes') {
+          if (!TARGET_DEPARTEMENT) {
+            throw new Error('MODE=sites-obsoletes requiert TARGET_DEPARTEMENT (ex: 93)');
+          }
+          const remainingBudget = pappersMeta
+            ? Math.max(0, PAPPERS_BUDGET - pappersMeta.used)
+            : PAPPERS_BUDGET;
+          if (remainingBudget <= 0) {
+            logger.warn(`   ⏸️  Budget Pappers épuisé — section ${section.code} skippée`);
+            sectionResults.push({ section, prospects: [], totalScanned: 0 });
+            continue;
+          }
+          const res = await service.findSitesObsoletes({
+            departement: TARGET_DEPARTEMENT,
+            sectionActivite: section.code,
+            pappersBudget: remainingBudget,
+            maxEnrich: 50,
+            requireFullContact: REQUIRE_FULL_CONTACT,
+            runLighthouse: false,
+            page: 1,
+            perPage: 50,
+          });
+          sectionResults.push({
+            section,
+            prospects: res.results,
+            totalScanned: res.totalScanned,
+          });
+          const prev: PappersMeta = pappersMeta ?? { used: 0, cap: PAPPERS_BUDGET, enriched: 0 };
+          pappersMeta = {
+            used: prev.used + res.pappersBudgetUsed,
+            cap: PAPPERS_BUDGET,
+            enriched: prev.enriched + res.totalEnrichedPappers,
+          };
+          logger.log(
+            `   ✅ ${res.results.length} leads obsolètes (${res.totalEnrichedPappers} enrichis · ${res.pappersBudgetUsed} crédits)`,
+          );
+        } else {
+          const res = await service.findNouveauxEntrants({
+            ageMinDays: 90,
+            ageMaxDays: 270,
+            sectionActivite: section.code,
+            departement: TARGET_DEPARTEMENT,
+            probeWebsite: true,
+            runLighthouse: false,
+            minScore: 5,
+            page: 1,
+            perPage: 50,
+          });
+          sectionResults.push({
+            section,
+            prospects: res.results,
+            totalScanned: res.totalScanned,
+          });
+          logger.log(
+            `   ✅ ${res.results.length} leads (${res.totalAfterFilter} ≥5 / ${res.totalScanned} scannés)`,
+          );
+        }
       } catch (err) {
         logger.error(`   ❌ ${section.code} : ${err instanceof Error ? err.message : err}`);
       }
     }
 
-    const report = buildReport(sectionResults);
+    if (pappersMeta) {
+      logger.log(
+        `[pappers] Total : ${pappersMeta.enriched} enrichissements · ${pappersMeta.used}/${pappersMeta.cap} crédits consommés`,
+      );
+    }
+
+    const report = buildReport(sectionResults, pappersMeta);
     writeReport(report);
     process.stdout.write(report);
   } finally {
@@ -79,7 +137,10 @@ async function main() {
   }
 }
 
-function buildReport(sectionResults: SectionResult[]): string {
+function buildReport(
+  sectionResults: SectionResult[],
+  pappersMeta: { used: number; cap: number; enriched: number } | null,
+): string {
   const today = new Date().toISOString().split('T')[0];
   const allProspects = sectionResults.flatMap((s) =>
     s.prospects.map((p) => ({ ...p, sectionLabel: s.section.label, sectionCode: s.section.code })),
@@ -91,10 +152,15 @@ function buildReport(sectionResults: SectionResult[]): string {
   const totalScanned = sectionResults.reduce((sum, s) => sum + s.totalScanned, 0);
 
   const lines: string[] = [];
-  lines.push(`# 🎯 Prospects hot — semaine du ${today}`);
+  const modeLabel = MODE === 'sites-obsoletes' ? '— Sites obsolètes (refonte)' : '— Nouveaux entrants (création)';
+  lines.push(`# 🎯 Prospects ${modeLabel} — semaine du ${today}`);
   lines.push('');
   if (TARGET_DEPARTEMENT) {
     lines.push(`**Zone ciblée** : département ${TARGET_DEPARTEMENT}`);
+    lines.push('');
+  }
+  if (pappersMeta) {
+    lines.push(`**Budget Pappers** : ${pappersMeta.used}/${pappersMeta.cap} crédits consommés · ${pappersMeta.enriched} enrichissements`);
     lines.push('');
   }
   lines.push(`**Résumé** : ${hot.length} hot · ${warm.length} warm · ${cold.length} cold · ${totalScanned} entreprises scannées au total`);
@@ -179,6 +245,16 @@ function buildReport(sectionResults: SectionResult[]): string {
     block.push(`- **Ville** : ${villeText}`);
     if (dirigeant) block.push(`- **Dirigeant** : ${dirText}`);
     block.push(`- **Créée le** : ${e.dateCreation} (${e.ancienneteJours} jours)`);
+    if (p.pappers) {
+      const c = p.pappers;
+      const contactParts: string[] = [];
+      if (c.email) contactParts.push(`📧 \`${c.email}\``);
+      if (c.telephone) contactParts.push(`📞 \`${c.telephone}\``);
+      if (c.siteWeb) contactParts.push(`🔗 ${c.siteWeb}`);
+      if (contactParts.length > 0) {
+        block.push(`- **Contact (Pappers)** : ${contactParts.join(' · ')} (coût ${c.cost} crédits)`);
+      }
+    }
     block.push(...websiteBlock);
     block.push(`- **Score breakdown** : ${breakdown || '_aucun_'}`);
     block.push(`- **Recherche complémentaire** : [annuaire-entreprises](${annuaireUrl}) · [Pappers](${pappersUrl})`);

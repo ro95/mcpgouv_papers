@@ -26,11 +26,20 @@ export class ProspectScoreDto {
   @ApiProperty({ enum: ['cold', 'warm', 'hot'] }) tier!: 'cold' | 'warm' | 'hot';
 }
 
+export class PappersContactDto {
+  @ApiPropertyOptional({ nullable: true }) email!: string | null;
+  @ApiPropertyOptional({ nullable: true }) telephone!: string | null;
+  @ApiPropertyOptional({ nullable: true }) siteWeb!: string | null;
+  @ApiProperty() cost!: number;
+}
+
 export class ProspectDto {
   @ApiProperty({ type: EntrepriseDto }) entreprise!: EntrepriseDto;
   @ApiProperty({ type: ProspectScoreDto }) score!: ProspectScoreDto;
   @ApiPropertyOptional({ type: WebsiteSignalsDto, nullable: true })
   website!: WebsiteSignalsDto | null;
+  @ApiPropertyOptional({ type: PappersContactDto, nullable: true })
+  pappers?: PappersContactDto | null;
 }
 
 export class PaginatedProspectsDto {

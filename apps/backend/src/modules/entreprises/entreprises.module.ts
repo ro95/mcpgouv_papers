@@ -50,6 +50,7 @@ import { InseeApiMapper } from './infrastructure/mappers/insee-api.mapper';
     EntrepriseApiMapper,
     InseeApiClient,
     InseeApiMapper,
+    PappersClient,
   ],
 })
 export class EntreprisesModule {}
