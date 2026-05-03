@@ -36,7 +36,8 @@ export class Entreprise {
     public readonly nombreEtablissementsOuverts: number,
     public readonly trancheEffectifSalarie: string | null,
     public readonly dateImmatriculation: string | null,
-    public readonly dirigeants: Dirigeant[] = [], // ← nouveau
+    public readonly dirigeants: Dirigeant[] = [],
+    public readonly categorieJuridique: string | null = null,
   ) {}
 
   get estActive(): boolean {

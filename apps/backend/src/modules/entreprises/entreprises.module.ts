@@ -44,6 +44,12 @@ import { InseeApiMapper } from './infrastructure/mappers/insee-api.mapper';
       useClass: EntreprisesApiRepository,
     },
   ],
-  exports: [EntreprisesService],
+  exports: [
+    EntreprisesService,
+    RechercheEntreprisesClient,
+    EntrepriseApiMapper,
+    InseeApiClient,
+    InseeApiMapper,
+  ],
 })
 export class EntreprisesModule {}

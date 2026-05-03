@@ -13,7 +13,10 @@ export class ScoringService {
   score(entreprise: Entreprise, website: WebsiteSignals | null): ProspectScore {
     const breakdown: Record<string, number> = {};
 
-    const formeJuridique = this.detectFormeJuridique(entreprise.nomRaisonSociale);
+    const formeJuridique = this.detectFormeJuridique(
+      entreprise.nomRaisonSociale,
+      entreprise.categorieJuridique,
+    );
     if (formeJuridique === 'SAS' || formeJuridique === 'SASU') breakdown.forme_sas = 2;
     else if (formeJuridique === 'SARL') breakdown.forme_sarl = 1;
 
@@ -41,7 +44,17 @@ export class ScoringService {
     };
   }
 
-  private detectFormeJuridique(nom: string): 'SAS' | 'SASU' | 'SARL' | 'EURL' | 'AUTRE' {
+  private detectFormeJuridique(
+    nom: string,
+    categorieJuridique: string | null,
+  ): 'SAS' | 'SASU' | 'SARL' | 'EURL' | 'AUTRE' {
+    // Codes INSEE catégorie juridique : https://www.insee.fr/fr/information/2028129
+    if (categorieJuridique) {
+      if (categorieJuridique === '5710') return 'SAS';
+      if (categorieJuridique === '5720') return 'SASU';
+      if (categorieJuridique === '5499') return 'SARL';
+      if (categorieJuridique === '5485') return 'EURL';
+    }
     const upper = nom.toUpperCase();
     if (/\bSASU\b/.test(upper)) return 'SASU';
     if (/\bSAS\b/.test(upper)) return 'SAS';

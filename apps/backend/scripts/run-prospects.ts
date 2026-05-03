@@ -116,16 +116,24 @@ function buildReport(sectionResults: SectionResult[]): string {
       .map(([k, v]) => `${k}=+${v}`)
       .join(' · ');
 
+    const villeText = e.siege.libelleCommune
+      ? `${e.siege.libelleCommune} (${e.siege.codePostal}, dépt ${e.siege.departement})`
+      : '_(siege non récupérable côté INSEE — voir liens ci-dessous)_';
+
+    const annuaireUrl = `https://annuaire-entreprises.data.gouv.fr/entreprise/${e.siren}`;
+    const pappersUrl = `https://www.pappers.fr/entreprise/${e.siren}`;
+
     const block: string[] = [];
     block.push(`### ${idx + 1}. ${e.nomRaisonSociale} — score ${p.score.total} (${p.score.tier})`);
     block.push('');
     block.push(`- **SIREN** : \`${e.siren}\``);
     block.push(`- **Activité** : ${e.libelleActivitePrincipale} (NAF \`${e.activitePrincipale}\`, section ${p.sectionCode})`);
-    block.push(`- **Ville** : ${e.siege.libelleCommune} (${e.siege.codePostal}, dépt ${e.siege.departement})`);
-    block.push(`- **Dirigeant** : ${dirText}`);
+    block.push(`- **Ville** : ${villeText}`);
+    if (dirigeant) block.push(`- **Dirigeant** : ${dirText}`);
     block.push(`- **Créée le** : ${e.dateCreation} (${e.ancienneteJours} jours)`);
     block.push(`- **Site web** : ${websiteText}`);
     block.push(`- **Score breakdown** : ${breakdown || '_aucun_'}`);
+    block.push(`- **Recherche complémentaire** : [annuaire-entreprises](${annuaireUrl}) · [Pappers](${pappersUrl})`);
     block.push('');
     return block.join('\n');
   };

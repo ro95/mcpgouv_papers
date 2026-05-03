@@ -41,6 +41,8 @@ export class InseeApiMapper {
       1,
       raw.trancheEffectifsUniteLegale ?? null,
       null,
+      [],
+      currentPeriod?.categorieJuridiqueUniteLegale ?? null,
     );
   }
 
